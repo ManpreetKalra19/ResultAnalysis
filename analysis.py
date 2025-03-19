@@ -13,7 +13,7 @@ import seaborn as sns
 
 # Set page configuration
 st.set_page_config(
-    page_title="Academic Result Analysis",
+    page_title="Class XII Academic Result Analysis",
     page_icon="📊",
     layout="wide"
 )
@@ -78,7 +78,9 @@ def load_data(result_file, subject_codes_file):
         results_df = pd.read_csv(result_file)
         
         # Load subject codes data
-        subject_codes_df = pd.read_csv(subject_codes_file, skiprows=1)
+        subject_codes_df = pd.read_csv(subject_codes_file, skiprows=0)
+        #subject_codes_df = pd.read_csv(subject_codes_file, skiprows=1)
+
         
         # Clean up subject codes dataframe
         subject_codes_df.columns = [col.strip() for col in subject_codes_df.columns]
@@ -91,11 +93,11 @@ def load_data(result_file, subject_codes_file):
                 valid_columns.append(col)
         
         subject_codes_df = subject_codes_df[valid_columns]
-        subject_codes_df.columns = ['S.No', 'Subject', 'Number']
+        subject_codes_df.columns = ['Subject', 'Code']
         
         # Clean up subject codes data
         subject_codes_df['Subject'] = subject_codes_df['Subject'].apply(lambda x: str(x).strip())
-        subject_codes_df['Code'] = subject_codes_df['Subject'].apply(lambda x: str(x).split('\n')[-1].strip() if '\n' in str(x) else '')
+        #subject_codes_df['Code'] = subject_codes_df['Subject'].apply(lambda x: str(x).split('\n')[-1].strip() if '\n' in str(x) else '')
         subject_codes_df['Subject'] = subject_codes_df['Subject'].apply(lambda x: str(x).split('\n')[0].strip() if '\n' in str(x) else x)
         
         return results_df, subject_codes_df
@@ -103,6 +105,7 @@ def load_data(result_file, subject_codes_file):
     except Exception as e:
         st.error(f"Error loading data: {e}")
         return None, None
+    
 
 def analyze_results(results_df):
     """Analyze the results data and return metrics."""
@@ -112,7 +115,7 @@ def analyze_results(results_df):
         
         # Extract all subject marks columns
         subject_columns = []
-        for i in range(0, 6):  # Assuming maximum 6 subjects per student
+        for i in range(0,6):  # Assuming maximum 6 subjects per student
             code_col = f'Code.{i}' if i > 0 else 'Code'
             marks_col = f'Marks.{i}' if i > 0 else 'Marks'
             
@@ -126,29 +129,70 @@ def analyze_results(results_df):
         
         # Calculate metrics for each student
         students_data = []
+        compartment_count = 0
+        failed_count = 0
         
         for _, row in results_df.iterrows():
             student_marks = []
+            subject_marks_dict = {}  # To store subject code and marks pairs
             
             for code_col, marks_col in subject_columns:
                 if pd.notna(row[code_col]) and pd.notna(row[marks_col]) and row[marks_col] > 0:
                     student_marks.append(row[marks_col])
+                    subject_marks_dict[str(row[code_col])] = row[marks_col]
             
             if student_marks:
                 # Calculate best of five
                 if len(student_marks) >= 5:
-                    best_five = sorted(student_marks, reverse=True)[:5]
+                    # Sort marks in descending order
+                    sorted_marks = sorted(student_marks, reverse=True)
+                    best_five = sorted_marks[:5]
                     avg_best_five = sum(best_five) / 5
+                    
+                    # Check for compartment and failed status in best five subjects
+                    best_five_subject_codes = []
+                    for code, marks in subject_marks_dict.items():
+                        if marks in best_five:
+                            best_five_subject_codes.append((code, marks))
+                            if len(best_five_subject_codes) == 5:
+                                break
+                    
+                    # Count subjects with marks less than 33 in best five
+                    below_passing_count = sum(1 for _, marks in best_five_subject_codes if marks < 33)
+                    
+                    # Update compartment and failed counts
+                    if below_passing_count == 1:
+                        compartment_count += 1
+                        status = "Compartment"
+                    elif below_passing_count > 1:
+                        failed_count += 1
+                        status = "Failed"
+                    else:
+                        status = "Passed"
                 else:
                     avg_best_five = sum(student_marks) / len(student_marks)
+                    # For students with less than 5 subjects, check all subjects
+                    below_passing_count = sum(1 for marks in student_marks if marks < 33)
+                    if below_passing_count == 1:
+                        compartment_count += 1
+                        status = "Compartment"
+                    elif below_passing_count > 1:
+                        failed_count += 1
+                        status = "Failed"
+                    else:
+                        status = "Passed"
                 
                 students_data.append({
                     'Name': row['Name'],
                     'Roll No': row['Roll No'],
-                    'Best of Five Percentage': avg_best_five
+                    'Best of Five Percentage': avg_best_five,
+                    'Status': status
                 })
         
         students_df = pd.DataFrame(students_data)
+        
+        # Calculate passed students count
+        passed_count = total_students - compartment_count - failed_count
         
         # Overall school average
         school_avg = students_df['Best of Five Percentage'].mean()
@@ -174,41 +218,70 @@ def analyze_results(results_df):
         # Calculate top 5 students
         top_students = students_df.sort_values(by='Best of Five Percentage', ascending=False).head(5)
         
-        # Subject-wise analysis
-        subject_analysis = {}
+        # UPDATED SECTION: Subject-wise analysis using the new approach
+        subject_data = []
+        for i in range(6):  # Assuming maximum 6 subjects per student
+            if i == 0:
+                code_col = 'Code'
+                marks_col = 'Marks'
+            else:
+                code_col = f'Code.{i}'
+                marks_col = f'Marks.{i}'
+                
+            if code_col in results_df.columns and marks_col in results_df.columns:
+                temp = results_df[['Name', code_col, marks_col]].copy()
+                temp = temp.rename(columns={code_col: 'Subject', marks_col: 'Marks'})
+                # Drop rows where Subject is NaN or 0
+                temp = temp.dropna(subset=['Subject'])
+                temp = temp[temp['Subject'] != 0]
+                temp = temp[temp['Subject'] != '0']
+                # Convert marks to numeric
+                temp['Marks'] = pd.to_numeric(temp['Marks'], errors='coerce')
+                # Only include rows with valid marks
+                temp = temp[temp['Marks'] > 0]
+                subject_data.append(temp)
         
-        for code_col, marks_col in subject_columns:
-            # Group by subject code
-            subject_groups = results_df.groupby(code_col)
+        # Concatenate all subject dataframes
+        if subject_data:
+            long_df = pd.concat(subject_data, ignore_index=True)
             
-            for code, group in subject_groups:
-                if pd.notna(code) and code != '0' and code != 0:
-                    valid_marks = group[marks_col][group[marks_col] > 0]
+            # Group by Subject and aggregate
+            subject_analysis = {}
+            groups = long_df.groupby('Subject')
+            
+            for subject, group in groups:
+                if str(subject) != '0':  # Skip subject code 0
+                    highest_mark = group['Marks'].max()
+                    num_students = group['Name'].nunique()
+                    subject_avg = group['Marks'].mean()
+                    top_scorers = group[group['Marks'] == highest_mark]['Name'].unique()
                     
-                    if len(valid_marks) > 0:
-                        highest_marks = valid_marks.max()
-                        avg_marks = valid_marks.mean()
-                        toppers = group[group[marks_col] == highest_marks]['Name'].tolist()
-                        
-                        subject_analysis[str(code)] = {
-                            'Subject Code': str(code),
-                            'Highest Marks': highest_marks,
-                            'Students': len(valid_marks),
-                            'Subject Average': avg_marks,
-                            'Toppers': toppers
-                        }
+                    subject_analysis[str(subject)] = {
+                        'Subject Code': str(subject),
+                        'Highest Marks': highest_mark,
+                        'Students': num_students,
+                        'Subject Average': subject_avg,
+                        'Toppers': list(top_scorers)
+                    }
+        else:
+            subject_analysis = {}
         
         return {
             'total_students': total_students,
+            'passed_count': passed_count,
+            'compartment_count': compartment_count,
+            'failed_count': failed_count,
             'school_avg': school_avg,
             'distribution': distribution,
             'top_students': top_students,
-            'subject_analysis': subject_analysis
+            'subject_analysis': subject_analysis,
+            'students_df': students_df  # Include full student data for additional analyses
         }
     
     except Exception as e:
         st.error(f"Error analyzing results: {e}")
         return None
+
 
 def generate_report(analysis_results, subject_codes_df):
     """Generate a Word document report based on the analysis."""
@@ -223,14 +296,19 @@ def generate_report(analysis_results, subject_codes_df):
         # Student Attendance section
         add_heading(doc, 'STUDENT ATTENDANCE', level=1)
         
+        # Calculate percentages
+        passed_percentage = (analysis_results['passed_count'] / analysis_results['total_students']) * 100
+        compartment_percentage = (analysis_results['compartment_count'] / analysis_results['total_students']) * 100
+        failed_percentage = (analysis_results['failed_count'] / analysis_results['total_students']) * 100
+        
         attendance_data = [
             ['', 'NUMBER', 'PERCENTAGE'],
             ['NUMBER OF STUDENTS ENROLLED', str(analysis_results['total_students']), '100%'],
             ['NUMBER OF STUDENTS ABSENT', '0', '0%'],  # Placeholder
-            ['NUMBER OF STUDENTS APPEARED', str(analysis_results['total_students']), '100%'],  # Placeholder
-            ['NUMBER OF STUDENTS PASSED', str(analysis_results['total_students']), '100%'],  # Placeholder
-            ['NUMBER OF STUDENTS GETTING COMPARTMENTS', '0', '0%'],  # Placeholder
-            ['NUMBER OF STUDENTS FAILED', '0', '0%']  # Placeholder
+            ['NUMBER OF STUDENTS APPEARED', str(analysis_results['total_students']), '100%'],
+            ['NUMBER OF STUDENTS PASSED', str(analysis_results['passed_count']), f"{passed_percentage:.2f}%"],
+            ['NUMBER OF STUDENTS GETTING COMPARTMENTS', str(analysis_results['compartment_count']), f"{compartment_percentage:.2f}%"],
+            ['NUMBER OF STUDENTS FAILED', str(analysis_results['failed_count']), f"{failed_percentage:.2f}%"]
         ]
         
         attendance_table = create_table(doc, rows=len(attendance_data), cols=3, data=attendance_data)
@@ -285,16 +363,38 @@ def generate_report(analysis_results, subject_codes_df):
                 f"{data['Highest Marks']:.1f}",
                 str(data['Students']),
                 f"{data['Subject Average']:.2f}",
-                ', '.join(data['Toppers'][:3])  # Limit to 3 toppers for space
+                ', '.join(data['Toppers'][:20])  # Limit to 20 toppers for space
             ])
         
         subject_table = create_table(doc, rows=len(subject_data), cols=6, data=subject_data)
+        
+        # Add compartment and fail details
+        if analysis_results['compartment_count'] > 0 or analysis_results['failed_count'] > 0:
+            doc.add_paragraph()
+            status_para = doc.add_paragraph()
+            status_run = status_para.add_run("STUDENT STATUS DETAILS")
+            status_run.underline = True
+            status_run.bold = True
+            
+            if analysis_results['compartment_count'] > 0:
+                doc.add_paragraph("Students with Compartment (Failed in one subject):")
+                compartment_students = analysis_results['students_df'][analysis_results['students_df']['Status'] == 'Compartment']
+                for _, student in compartment_students.iterrows():
+                    doc.add_paragraph(f"- {student['Name']} (Roll No: {student['Roll No']})")
+            
+            if analysis_results['failed_count'] > 0:
+                doc.add_paragraph("Failed Students (Failed in more than one subject):")
+                failed_students = analysis_results['students_df'][analysis_results['students_df']['Status'] == 'Failed']
+                for _, student in failed_students.iterrows():
+                    doc.add_paragraph(f"- {student['Name']} (Roll No: {student['Roll No']})")
         
         return doc
     
     except Exception as e:
         st.error(f"Error generating report: {e}")
         return None
+
+
 
 def create_visualizations(analysis_results):
     """Create visualizations for the dashboard."""
@@ -334,18 +434,14 @@ def create_visualizations(analysis_results):
     return fig1, fig2
 
 # App layout
+# App layout
 def app():
-    st.title("Academic Result Analysis App")
+    st.title("Class XII Academic Result Analysis App")
     
     st.markdown("""
     This app analyzes academic results data and generates a comprehensive report. 
     Upload your result.csv and subject_codes.csv files to get started.
     """)
-    
-    # Optional API key for authentication (placeholder for future functionality)
-    with st.expander("API Key Configuration (Optional)"):
-        api_key = st.text_input("Enter API Key (if required)", type="password")
-        st.info("API key is optional and for demonstration purposes. All functionality works without it.")
     
     # File uploads
     col1, col2 = st.columns(2)
@@ -385,6 +481,19 @@ def app():
                     with col3:
                         st.metric("Top Score", f"{analysis_results['top_students']['Best of Five Percentage'].iloc[0]:.2f}%")
                     
+                    # Additional status metrics
+                    st.subheader("Student Status")
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Passed", analysis_results['passed_count'],
+                                 f"{(analysis_results['passed_count']/analysis_results['total_students']*100):.1f}%")
+                    with col2:
+                        st.metric("Compartment", analysis_results['compartment_count'],
+                                 f"{(analysis_results['compartment_count']/analysis_results['total_students']*100):.1f}%")
+                    with col3:
+                        st.metric("Failed", analysis_results['failed_count'],
+                                 f"{(analysis_results['failed_count']/analysis_results['total_students']*100):.1f}%")
+                    
                     # Display performance distribution and subject averages
                     fig1, fig2 = create_visualizations(analysis_results)
                     st.pyplot(fig1)
@@ -392,7 +501,7 @@ def app():
                     
                     # Top students
                     st.subheader("Top 5 Students")
-                    top_df = analysis_results['top_students'][['Name', 'Roll No', 'Best of Five Percentage']]
+                    top_df = analysis_results['top_students'][['Name', 'Roll No', 'Best of Five Percentage', 'Status']]
                     top_df['Best of Five Percentage'] = top_df['Best of Five Percentage'].apply(lambda x: f"{x:.2f}%")
                     st.dataframe(top_df)
                     
@@ -412,6 +521,17 @@ def app():
                     
                     subject_df = pd.DataFrame(subject_data)
                     st.dataframe(subject_df)
+                    
+                    # Students with compartment or failed status
+                    if analysis_results['compartment_count'] > 0:
+                        st.subheader("Students with Compartment")
+                        compartment_df = analysis_results['students_df'][analysis_results['students_df']['Status'] == 'Compartment']
+                        st.dataframe(compartment_df[['Name', 'Roll No', 'Best of Five Percentage']])
+                    
+                    if analysis_results['failed_count'] > 0:
+                        st.subheader("Failed Students")
+                        failed_df = analysis_results['students_df'][analysis_results['students_df']['Status'] == 'Failed']
+                        st.dataframe(failed_df[['Name', 'Roll No', 'Best of Five Percentage']])
                     
                     # Generate report
                     st.subheader("Generate Report")
